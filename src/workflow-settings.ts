@@ -54,6 +54,17 @@ export interface WorkflowSettings {
    * tool) so a subagent can't fan out through them.
    */
   excludeSubagentTools?: string[];
+  /**
+   * Host extensions that workflow subagents should load, matched against
+   * each extension's install path (a case-insensitive substring match, or an
+   * exact match on the install directory name). Empty/omitted (default)
+   * keeps the #109 mitigation: subagents load no host extensions at all.
+   * When non-empty, subagents load only matching extensions — MCP bridges,
+   * browser tools, or anything else another installed extension registers.
+   * The #107 tool denylist still applies on top, so recursive-orchestration
+   * tools stay denied even when their extension is allowlisted.
+   */
+  subagentExtensions?: string[];
 }
 
 export interface WorkflowSettingsStore {
@@ -205,6 +216,12 @@ function normalizeSettings(value: unknown): WorkflowSettings {
   if (Array.isArray(raw.excludeSubagentTools)) {
     const names = raw.excludeSubagentTools.filter((t): t is string => typeof t === "string" && t.trim().length > 0);
     if (names.length) settings.excludeSubagentTools = names;
+  }
+  if (Array.isArray(raw.subagentExtensions)) {
+    const names = raw.subagentExtensions
+      .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+      .map((t) => t.trim());
+    if (names.length) settings.subagentExtensions = names;
   }
   return settings;
 }

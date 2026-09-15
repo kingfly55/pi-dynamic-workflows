@@ -124,6 +124,32 @@ describe("workflow settings", () => {
     });
   });
 
+  it("loads and normalizes subagentExtensions, trimming entries and dropping blanks", () => {
+    withSettingsPath((settingsPath) => {
+      mkdirSync(dirname(settingsPath), { recursive: true });
+
+      writeFileSync(settingsPath, JSON.stringify({ subagentExtensions: ["my-mcp-bridge", "browser-tools"] }), "utf-8");
+      assert.deepEqual(loadWorkflowSettings(settingsPath), {
+        subagentExtensions: ["my-mcp-bridge", "browser-tools"],
+      });
+
+      // Entries are trimmed; non-string and blank entries are filtered out.
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({ subagentExtensions: ["  spaced-ext  ", 42, "", "  ", null] }),
+        "utf-8",
+      );
+      assert.deepEqual(loadWorkflowSettings(settingsPath), { subagentExtensions: ["spaced-ext"] });
+
+      // An all-invalid (or empty) list yields no key at all — i.e. the #109
+      // default (no host extensions) is preserved.
+      writeFileSync(settingsPath, JSON.stringify({ subagentExtensions: [1, 2, ""] }), "utf-8");
+      assert.deepEqual(loadWorkflowSettings(settingsPath), {});
+      writeFileSync(settingsPath, JSON.stringify({ subagentExtensions: "nope" }), "utf-8");
+      assert.deepEqual(loadWorkflowSettings(settingsPath), {});
+    });
+  });
+
   it("normalizes default concurrency and agent retries", () => {
     withSettingsPath((settingsPath) => {
       mkdirSync(dirname(settingsPath), { recursive: true });
@@ -186,6 +212,23 @@ describe("workflow settings", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("normalizes subagentExtensions through the project-local and project layers", () => {
+    withSettingsPath((settingsPath) => {
+      const projectLocalSettingsPath = join(dirname(settingsPath), "repo-settings.json");
+      const projectSettingsPath = join(dirname(settingsPath), "project-settings.json");
+      const options = { settingsPath, projectLocalSettingsPath, projectSettingsPath };
+      saveWorkflowSettings({ subagentExtensions: ["repo-ext"] }, settingsPath);
+
+      // In-repo file overrides the global key.
+      writeFileSync(projectLocalSettingsPath, JSON.stringify({ subagentExtensions: ["local-ext"] }));
+      assert.deepEqual(loadWorkflowSettings(options), { subagentExtensions: ["local-ext"] });
+
+      // Per-project override still wins over what the repo ships.
+      saveWorkflowSettings({ subagentExtensions: ["user-ext"] }, { ...options, scope: "project" });
+      assert.deepEqual(loadWorkflowSettings(options), { subagentExtensions: ["user-ext"] });
+    });
   });
 
   it("normalizes repo-local defaultEffort before applying external project overrides", () => {

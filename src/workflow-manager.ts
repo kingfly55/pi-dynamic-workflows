@@ -318,6 +318,12 @@ export interface WorkflowManagerOptions {
    */
   excludeSubagentTools?: string[];
   /**
+   * Host extensions that workflow subagents should load — see
+   * WorkflowAgentOptions.subagentExtensions. Empty/omitted (default) keeps
+   * the #109 mitigation: subagents load no host extensions.
+   */
+  subagentExtensions?: string[];
+  /**
    * Persist each subagent transcript as a real pi session file under the
    * standard sessions directory. Default false (in-memory, discarded).
    */
@@ -344,6 +350,7 @@ export type WorkflowManagerReloadOptions = Pick<
   | "defaultTokenBudget"
   | "toolsets"
   | "excludeSubagentTools"
+  | "subagentExtensions"
   | "persistAgentSessions"
 >;
 
@@ -443,6 +450,7 @@ export class WorkflowManager extends EventEmitter {
   private defaultTokenBudget: number | null;
   private toolsets?: Record<string, () => ToolDefinition[]>;
   private excludeSubagentTools?: string[];
+  private subagentExtensions?: string[];
   private persistAgentSessions: boolean;
 
   constructor(options: WorkflowManagerOptions = {}) {
@@ -460,6 +468,7 @@ export class WorkflowManager extends EventEmitter {
     this.defaultTokenBudget = options.defaultTokenBudget ?? null;
     this.toolsets = options.toolsets;
     this.excludeSubagentTools = options.excludeSubagentTools;
+    this.subagentExtensions = options.subagentExtensions;
     this.persistAgentSessions = options.persistAgentSessions ?? false;
     this.maxTerminalRunsInMemory = options.maxTerminalRunsInMemory ?? DEFAULT_MAX_TERMINAL_RUNS_IN_MEMORY;
     this.persistence = createRunPersistence(this.cwd);
@@ -589,6 +598,7 @@ export class WorkflowManager extends EventEmitter {
     this.defaultTokenBudget = options.defaultTokenBudget ?? null;
     this.toolsets = options.toolsets;
     this.excludeSubagentTools = options.excludeSubagentTools;
+    this.subagentExtensions = options.subagentExtensions;
     this.persistAgentSessions = options.persistAgentSessions ?? false;
   }
 
@@ -891,6 +901,7 @@ export class WorkflowManager extends EventEmitter {
         tokenBudget: resolvedTokenBudget,
         tools: resolvedTools,
         excludeTools: this.excludeSubagentTools,
+        subagentExtensions: this.subagentExtensions,
         confirm,
         loadSavedWorkflow: this.loadSavedWorkflow,
         resumeJournal,

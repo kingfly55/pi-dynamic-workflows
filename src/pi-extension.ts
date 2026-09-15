@@ -97,6 +97,7 @@ function buildManagerOptions(cwd: string, storage: WorkflowStorage) {
       "web-research": () => [...createCodingTools(cwd), ...createWebTools()],
     },
     excludeSubagentTools: settings.excludeSubagentTools,
+    subagentExtensions: settings.subagentExtensions,
     defaultAgentTimeoutMs: settings.defaultAgentTimeoutMs ?? null,
     defaultTokenBudget: settings.defaultTokenBudget ?? null,
     concurrency: settings.defaultConcurrency,

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { AssistantMessage, Model, TextContent } from "@earendil-works/pi-ai";
 import {
   type AgentSessionEvent,
@@ -8,7 +8,9 @@ import {
   createAgentSession,
   createCodingTools,
   DefaultResourceLoader,
+  type Extension,
   getAgentDir,
+  type LoadExtensionsResult,
   ModelRegistry,
   type ModelRuntime,
   SessionManager,
@@ -265,6 +267,15 @@ export interface WorkflowAgentOptions {
   modelRegistry?: ModelRegistry;
   /** Persisted host session file used as the parent of persistent child sessions. */
   parentSessionFile?: string;
+  /**
+   * Host extensions that workflow subagents should load, matched against
+   * each extension's install path (a case-insensitive substring match, or an
+   * exact match on the install directory name). Empty/omitted (default)
+   * keeps the #109 mitigation: subagents load no host extensions at all.
+   * When non-empty, subagents load only matching extensions. The #107 tool
+   * denylist still applies on top.
+   */
+  subagentExtensions?: string[];
   /**
    * Persist each subagent transcript as a real pi session file under the
    * standard sessions directory (keyed by the runner's project cwd), instead
@@ -631,6 +642,27 @@ export type AgentRunResult<TSchemaDef extends TSchema | undefined> = TSchemaDef 
   : string;
 
 /**
+ * True when a host extension's install path matches any allowlist entry: a
+ * case-insensitive substring of `path`/`resolvedPath`, or an exact
+ * (case-insensitive) match on the install directory name. Exported for tests.
+ */
+export function matchesExtensionAllowlist(
+  ext: Pick<Extension, "path" | "resolvedPath">,
+  allowlist: readonly string[],
+): boolean {
+  return allowlist.some((entry) => {
+    const needle = entry.trim().toLowerCase();
+    if (!needle) return false;
+    for (const hay of [ext.path, ext.resolvedPath]) {
+      if (!hay) continue;
+      if (hay.toLowerCase().includes(needle)) return true;
+      if (basename(hay).toLowerCase() === needle) return true;
+    }
+    return false;
+  });
+}
+
+/**
  * Orchestration tools ALWAYS denied to workflow subagents. The `workflow` and
  * `workflow_control` tools are registered globally by the extension, so — unless
  * excluded — a subagent's session sees them and can start its own independent
@@ -674,6 +706,11 @@ export class WorkflowAgent {
   private readonly sharedRegistry?: ModelRegistry;
   /** Frozen host session file used for child-session lineage in this run. */
   private readonly parentSessionFile?: string;
+  /**
+   * Normalized host-extension allowlist for subagent loaders (see
+   * WorkflowAgentOptions.subagentExtensions). Empty = no host extensions.
+   */
+  private readonly subagentExtensions: string[];
   /** Lazily built once; shares the SDK's agentDir/auth so resolved models are authed. */
   private registry?: ModelRegistry;
   /**
@@ -717,6 +754,9 @@ export class WorkflowAgent {
     this.preSpawnModel = options.preSpawnModel;
     this.sharedRegistry = options.modelRegistry;
     this.parentSessionFile = options.parentSessionFile;
+    this.subagentExtensions = (options.subagentExtensions ?? [])
+      .filter((e): e is string => typeof e === "string" && e.trim().length > 0)
+      .map((e) => e.trim());
   }
 
   /**
@@ -743,17 +783,37 @@ export class WorkflowAgent {
    * resourceLoader is a supported embedding pattern. runWorkflow builds one
    * WorkflowAgent per run, so this loader's lifetime is exactly one run: built
    * once per directory, reused there, then dropped with the agent.
+   *
+   * When `subagentExtensions` is non-empty, the loader instead loads host
+   * extensions but filters them to the allowlist via `extensionsOverride`
+   * (case-insensitive substring match on the install path, or exact match on
+   * the install directory name). The allowlisted factories still run only
+   * once per directory per run thanks to the memo above — not once per
+   * subagent — so the #109 mitigation degrades only by the size of the
+   * allowlisted set. The #107 tool denylist applies on top regardless.
    */
   private getSharedResourceLoader(agentDir: string, cwd = this.cwd): Promise<DefaultResourceLoader> {
     const key = JSON.stringify([agentDir, cwd]);
     const existing = this.resourceLoaders.get(key);
     if (existing) return existing;
+    const allowlist = this.subagentExtensions;
     const pending = (async () => {
       const loader = new DefaultResourceLoader({
         cwd,
         agentDir,
         settingsManager: this.sessionOptions.settingsManager ?? SettingsManager.create(cwd, agentDir),
-        noExtensions: true,
+        // An allowlist means "load extensions, but only these" — noExtensions
+        // must be off or the filter would see an empty set. Empty allowlist
+        // keeps the #109 default: no host extensions at all.
+        noExtensions: allowlist.length === 0 ? true : undefined,
+        ...(allowlist.length > 0
+          ? {
+              extensionsOverride: (base: LoadExtensionsResult) => ({
+                ...base,
+                extensions: base.extensions.filter((ext) => matchesExtensionAllowlist(ext, allowlist)),
+              }),
+            }
+          : {}),
       });
       await loader.reload();
       return loader;

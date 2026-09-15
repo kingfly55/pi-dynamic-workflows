@@ -242,6 +242,16 @@ A schema-less agent call that comes back as whitespace-only text is a recoverabl
 
 Pausing and resuming a run keeps the limits it started with — `maxAgents`, `agentTimeoutMs`, `concurrency`, and `agentRetries` carry over instead of falling back to defaults, and `tokenBudget` tracking is cumulative across the pause, so a run can't reset its spend by pausing and resuming.
 
+To let subagents use tools registered by specific host extensions (an MCP bridge, browser tools), set `subagentExtensions` in the settings file:
+
+```json
+{
+  "subagentExtensions": ["my-mcp-bridge"]
+}
+```
+
+Each entry matches against the extension's install path (case-insensitive substring) or exactly against the install directory name. Empty or omitted (the default) preserves the no-host-extensions behavior. The allowlisted extensions load once per run and are shared by all subagents, so the leak mitigation degrades only by the size of the allowlisted set; the `workflow`/`workflow_control` tool denylist still applies on top, so an allowlisted extension cannot reintroduce recursive orchestration.
+
 </details>
 
 <details>
@@ -319,7 +329,7 @@ Library API note: the unused `createSharedStoreTools` export was removed — use
 
 Two behavior changes to know about:
 
-- **Subagents no longer load host extensions by default.** Each run now builds one shared, extension-free resource loader for all of its subagents (a memory-leak mitigation). Skills, prompts, and `AGENTS.md` context still load, and the coding tools and any toolset (e.g. `web-research`) you hand a subagent are unaffected. What subagents lose is **host-extension-registered tools** — MCP bridges, browser tools, or anything else another installed extension adds. If an `agentType` names one of those tools in its allowlist, that entry now matches nothing. This also means a subagent can no longer recurse into another orchestration extension, even one not covered by the existing tool denylist.
+- **Subagents no longer load host extensions by default.** Each run now builds one shared, extension-free resource loader for all of its subagents (a memory-leak mitigation). Skills, prompts, and `AGENTS.md` context still load, and the coding tools and any toolset (e.g. `web-research`) you hand a subagent are unaffected. What subagents lose is **host-extension-registered tools** — MCP bridges, browser tools, or anything else another installed extension adds. If an `agentType` names one of those tools in its allowlist, that entry now matches nothing. This also means a subagent can no longer recurse into another orchestration extension, even one not covered by the existing tool denylist. To opt specific extensions back in, set `subagentExtensions` in `~/.pi/workflows/settings.json` (see below) — subagents then load only the matching extensions, and the `workflow`/`workflow_control` denylist still applies on top.
 - **Checkpoints persisted before this release re-run once.** `checkpoint()`'s resume-identity hash now also covers `default`, `headless`, and `timeoutMs`, so changing any of them between runs correctly invalidates a stale cached answer. This is a one-time effect: any checkpoint cached under the old hash simply re-prompts once and then caches normally again.
 
 ## Host: customize worker model before session creation

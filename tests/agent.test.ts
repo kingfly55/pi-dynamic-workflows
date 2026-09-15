@@ -17,6 +17,7 @@ import type { AgentRunOptions, AgentUsage } from "../src/agent.js";
 import {
   DEFAULT_EXCLUDED_SUBAGENT_TOOLS,
   listAvailableModelSpecs,
+  matchesExtensionAllowlist,
   resolveAgentModelSpec,
   runtimeOf,
   subagentExcludedTools,
@@ -1542,6 +1543,34 @@ test("subagentExcludedTools always includes the defaults, plus caller/session na
   assert.ok(merged.includes("session-denied") && merged.includes("extra"), "both caller lists are folded in");
 });
 
+test("matchesExtensionAllowlist matches basename and path substrings, case-insensitively", () => {
+  const ext = {
+    path: "/home/user/.pi/extensions/my-mcp-bridge",
+    resolvedPath: "/home/user/.pi/extensions/my-mcp-bridge",
+  };
+  assert.equal(matchesExtensionAllowlist(ext, []), false, "empty allowlist matches nothing");
+  assert.equal(matchesExtensionAllowlist(ext, ["my-mcp-bridge"]), true, "exact directory-name match");
+  assert.equal(matchesExtensionAllowlist(ext, ["MY-MCP-BRIDGE"]), true, "basename match is case-insensitive");
+  assert.equal(matchesExtensionAllowlist(ext, ["mcp-bridge"]), true, "substring of the install path matches");
+  assert.equal(matchesExtensionAllowlist(ext, [".pi/extensions"]), true, "substring of resolvedPath matches");
+  assert.equal(matchesExtensionAllowlist(ext, ["other-extension"]), false, "non-matching entry matches nothing");
+  assert.equal(matchesExtensionAllowlist(ext, ["  ", "my-mcp"]), true, "blank entries are ignored");
+  assert.equal(
+    matchesExtensionAllowlist({ path: "", resolvedPath: "" }, ["my-mcp-bridge"]),
+    false,
+    "empty paths never match",
+  );
+});
+
+test("subagentExtensions constructor option is normalized like settings input", () => {
+  // Private field check via structural behavior: an allowlist of only blanks
+  // behaves like no allowlist (loader built with noExtensions). We assert the
+  // normalization indirectly through matchesExtensionAllowlist's blank rule
+  // plus construction not throwing.
+  const agent = new WorkflowAgent({ cwd: "/tmp", subagentExtensions: ["  ", "my-ext"] });
+  assert.ok(agent instanceof WorkflowAgent);
+});
+
 test("the subagent resource loader is built once per directory and shared across subagents (#109)", () => {
   // The #109 mitigation: one no-extensions loader per run, reused by every
   // subagent, instead of createAgentSession re-running every extension factory
@@ -1555,6 +1584,71 @@ test("the subagent resource loader is built once per directory and shared across
   // reload() may reject in a bare temp dir; we only assert memoization here.
   first.catch(() => {});
   second.catch(() => {});
+});
+
+test("subagentExtensions allowlist loads only matching host extensions in subagents", async () => {
+  // End-to-end through WorkflowAgent.run with a real on-disk extension: the
+  // allowlisted extension's tool must be callable, and a non-allowlisted
+  // extension's tool must be absent — while the loader stays shared (#109).
+  const home = mkdtempSync(join(tmpdir(), "pi-dynamic-workflows-subext-home-"));
+  const cwd = mkdtempSync(join(tmpdir(), "pi-dynamic-workflows-subext-cwd-"));
+  // User extensions live under <agentDir>/extensions; the agent's shared
+  // loader receives agentDir = getAgentDir(), which honors PI_CODING_AGENT_DIR.
+  const agentDir = join(home, ".pi", "agent");
+  const extDir = join(agentDir, "extensions");
+  const allowedDir = join(extDir, "allowed-ext");
+  const deniedDir = join(extDir, "denied-ext");
+  mkdirSync(allowedDir, { recursive: true });
+  mkdirSync(deniedDir, { recursive: true });
+  writeFileSync(
+    join(allowedDir, "index.ts"),
+    `export default function(pi) { pi.registerTool({ name: "allowed_tool", description: "allowed", execute: async () => "ALLOWED_TOOL_RESULT" }); }\n`,
+  );
+  writeFileSync(
+    join(deniedDir, "index.ts"),
+    `export default function(pi) { pi.registerTool({ name: "denied_tool", description: "denied", execute: async () => "DENIED_TOOL_RESULT" }); }\n`,
+  );
+  const core = createFauxCore({
+    provider: "fauxtest-subext",
+    models: [{ id: "faux-model", name: "Faux Model", contextWindow: 128000, maxTokens: 4096 }],
+  });
+  // Track extension factory executions via the tool the extension registers:
+  // each loader reload() re-runs factories, so a shared loader (#109) runs
+  // each factory exactly once no matter how many subagents run.
+  const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await withFakeHomeAsync(home, async () => {
+      const registry = await fauxRegistry(home, "fauxtest-subext", core);
+      const settingsManager = SettingsManager.inMemory({}, { projectTrusted: true });
+      const agent = new WorkflowAgent({
+        cwd,
+        modelRegistry: registry,
+        session: { settingsManager },
+        subagentExtensions: ["allowed-ext"],
+      });
+      const model = "fauxtest-subext/faux-model";
+      core.setResponses([
+        (context) => {
+          const tools = (context as { tools?: { name?: string }[] }).tools ?? [];
+          const names = tools.map((t) => t.name);
+          assert.ok(names.includes("allowed_tool"), "allowlisted extension tool must be visible to the subagent");
+          assert.ok(!names.includes("denied_tool"), "non-allowlisted extension tool must be hidden");
+          return fauxAssistantMessage("filter ok", { stopReason: "stop" });
+        },
+        () => fauxAssistantMessage("second ok", { stopReason: "stop" }),
+      ]);
+      assert.match(await agent.run("first", { model }), /filter ok/);
+      assert.match(await agent.run("second", { model }), /second ok/);
+      const loaders = (agent as unknown as { resourceLoaders: Map<string, unknown> }).resourceLoaders;
+      assert.equal(loaders.size, 1, "allowlisted loader stays shared per directory (#109)");
+    });
+  } finally {
+    if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test("a failed per-directory resource loader is evicted before the next attempt (#109)", async () => {

@@ -4721,3 +4721,20 @@ test(
     assert.equal(statusRow?.cacheRead, 0);
   }),
 );
+test(
+  "subagentExtensions survives reconfigureAfterReload for subsequent runs",
+  withTempCwd(async (cwd) => {
+    const manager = new WorkflowManager({ cwd, agent: fakeAgent(), subagentExtensions: ["my-ext"] });
+    assert.deepEqual(
+      (manager as unknown as { subagentExtensions?: string[] }).subagentExtensions,
+      ["my-ext"],
+      "manager retains the allowlist option",
+    );
+    manager.reconfigureAfterReload({ subagentExtensions: ["reloaded-ext"] });
+    assert.deepEqual(
+      (manager as unknown as { subagentExtensions?: string[] }).subagentExtensions,
+      ["reloaded-ext"],
+      "reload refreshes the allowlist for subsequent runs",
+    );
+  }),
+);
