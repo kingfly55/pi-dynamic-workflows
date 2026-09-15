@@ -18,6 +18,8 @@ Turn one request into a JavaScript orchestration script that fans work out acros
 
 Built for **codebase-wide audits, multi-perspective review, large refactors, and source-checked research**—the jobs that are too broad for one agent and one context window.
 
+> **Personal fork:** this repo diverges from [upstream](https://github.com/QuintinShaw/pi-dynamic-workflows) in one documented way — an opt-in `subagentExtensions` allowlist so workflow subagents can use host-extension tools. See [DIVERGENCES-FROM-UPSTREAM.md](DIVERGENCES-FROM-UPSTREAM.md) and the [Subagent host-extension allowlist](#subagent-host-extension-allowlist) section below.
+
 ![A real pi-dynamic-workflows run showing parallel agents and live progress](https://raw.githubusercontent.com/QuintinShaw/pi-dynamic-workflows/main/docs/media/demo.gif)
 
 ## Start in 30 seconds
@@ -242,7 +244,11 @@ A schema-less agent call that comes back as whitespace-only text is a recoverabl
 
 Pausing and resuming a run keeps the limits it started with — `maxAgents`, `agentTimeoutMs`, `concurrency`, and `agentRetries` carry over instead of falling back to defaults, and `tokenBudget` tracking is cumulative across the pause, so a run can't reset its spend by pausing and resuming.
 
-To let subagents use tools registered by specific host extensions (an MCP bridge, browser tools), set `subagentExtensions` in the settings file:
+### Subagent host-extension allowlist
+
+> **Fork-only feature** — not in upstream; see [DIVERGENCES-FROM-UPSTREAM.md](DIVERGENCES-FROM-UPSTREAM.md).
+
+By default subagents load no host extensions (upstream behavior), so tools registered by other installed extensions — MCP bridges, browser tools — are unavailable inside subagents. To opt specific extensions back in, set `subagentExtensions` in the settings file:
 
 ```json
 {
